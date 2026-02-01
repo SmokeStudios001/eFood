@@ -1,0 +1,63 @@
+# Stage 1: Install dependencies and build Flutter app
+FROM debian:stable-slim AS build-env
+
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl git wget unzip libgconf-2-4 gdb libstdc++6 libglu1-mesa fonts-droid-fallback lib32stdc++6 python3 psmisc openjdk-17-jdk && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+#variables
+ARG FLUTTER_VERSION=3.22.2
+ARG ANDROID_SDK_VERSION=commandlinetools-linux-7583922_latest.zip
+ARG ANDROID_HOME=/opt/android-sdk
+ARG FLUTTER_SDK=/usr/local/flutter
+
+# Install Flutter
+RUN git clone https://github.com/flutter/flutter.git $FLUTTER_SDK && \
+    cd $FLUTTER_SDK && git fetch && git checkout $FLUTTER_VERSION
+
+# Set Flutter path
+ENV PATH="/usr/local/flutter/bin:/usr/local/flutter/bin/cache/dart-sdk/bin:${PATH}"
+
+# Install Android SDK
+RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
+    cd $ANDROID_HOME/cmdline-tools && \
+    wget https://dl.google.com/android/repository/$ANDROID_SDK_VERSION -O commandlinetools.zip && \
+    unzip commandlinetools.zip && \
+    rm commandlinetools.zip && \
+    mkdir -p ${ANDROID_HOME}/cmdline-tools/latest && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools/* ${ANDROID_HOME}/cmdline-tools/latest/ && \
+    yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses && \
+    ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.0" "extras;google;google_play_services" "extras;google;market_apk_expansion"
+
+# Set Android SDK path
+ENV ANDROID_HOME=$ANDROID_HOME
+ENV PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:${PATH}
+
+# Copy the app files
+COPY . /app/
+WORKDIR /app/
+
+# Get app dependencies
+RUN flutter pub get
+
+
+# Build the app for Android
+RUN flutter build apk --target-platform android-arm,android-arm64,android-x64 --split-per-abi
+
+# Stage 2: Serve the built app using Nginx
+FROM nginx:stable-alpine
+
+
+# Copy the built APK content from the previous stage
+COPY --from=build-env /app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk /usr/share/nginx/html/app_release.apk
+
+# Copy custom nginx configuration
+COPY default.conf /etc/nginx/conf.d/default.conf
+
+# Expose port 80 for incoming web traffic
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
